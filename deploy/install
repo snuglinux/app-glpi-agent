@@ -1,0 +1,134 @@
+#!/bin/sh
+
+# app-glpi-agent package install/upgrade preparation.
+# Keep it simple and safe:
+# - do not write active GLPI Agent configuration from scratch here;
+# - do not start/stop services from package scripts;
+# - only prepare app-owned state and the GLPI Agent conf.d directory;
+# - migrate old app-glpi-agent clearos.cfg to glpi-agent.cfg once, if needed.
+
+logger -p local6.notice -t installer "app-glpi-agent - package preparation"
+
+mkdir -p /var/clearos/glpi_agent 2>/dev/null || true
+chown root:root /var/clearos/glpi_agent 2>/dev/null || true
+chmod 0755 /var/clearos/glpi_agent 2>/dev/null || true
+
+if [ -d /etc/glpi-agent ] || rpm -q glpi-agent >/dev/null 2>&1; then
+    mkdir -p /etc/glpi-agent/conf.d /etc/glpi-agent/certs 2>/dev/null || true
+    chown root:root /etc/glpi-agent /etc/glpi-agent/conf.d /etc/glpi-agent/certs 2>/dev/null || true
+    chmod 0755 /etc/glpi-agent /etc/glpi-agent/conf.d /etc/glpi-agent/certs 2>/dev/null || true
+
+    OLD_CONF=/etc/glpi-agent/conf.d/clearos.cfg
+    NEW_CONF=/etc/glpi-agent/conf.d/glpi-agent.cfg
+    CONFIG_BACKUP_KEEP=2
+
+    cleanup_config_backups() {
+        BASE_FILE="$1"
+        KEEP="${2:-$CONFIG_BACKUP_KEEP}"
+        OLD_BACKUPS=$(ls -1t "$BASE_FILE".bak-* 2>/dev/null | awk 'NR > keep' keep="$KEEP" || true)
+        if [ -n "$OLD_BACKUPS" ]; then
+            echo "$OLD_BACKUPS" | while IFS= read -r OLD_FILE; do
+                [ -n "$OLD_FILE" ] || continue
+                rm -f "$OLD_FILE" 2>/dev/null || true
+            done
+        fi
+    }
+
+    if [ -f "$OLD_CONF" ] && [ ! -f "$NEW_CONF" ]; then
+        TS=$(date +%Y%m%d-%H%M%S)
+        cp -a "$OLD_CONF" "$NEW_CONF" 2>/dev/null || true
+        if [ -f "$NEW_CONF" ]; then
+            chown root:root "$NEW_CONF" 2>/dev/null || true
+            chmod 0644 "$NEW_CONF" 2>/dev/null || true
+            mv "$OLD_CONF" "$OLD_CONF.bak-$TS" 2>/dev/null || true
+            cleanup_config_backups "$OLD_CONF" 2
+            cleanup_config_backups "$NEW_CONF" 2
+            logger -p local6.notice -t installer "app-glpi-agent - migrated clearos.cfg to glpi-agent.cfg"
+        fi
+    fi
+
+    if [ ! -e "$NEW_CONF" ]; then
+        cat > "$NEW_CONF" <<'CONFEOF'
+# Managed by ClearOS app-glpi-agent
+# Configure this file from Webconfig: /app/glpi_agent
+CONFEOF
+        chown root:root "$NEW_CONF" 2>/dev/null || true
+        chmod 0644 "$NEW_CONF" 2>/dev/null || true
+        logger -p local6.notice -t installer "app-glpi-agent - created empty glpi-agent.cfg"
+    fi
+
+    cleanup_config_backups "$NEW_CONF" 2
+    cleanup_config_backups "$OLD_CONF" 2
+fi
+
+# Install/update the small privileged helper used by Webconfig actions.
+# This follows the same conservative sudoers pattern as app-zabbix-agent2:
+# - install a fixed root-owned helper;
+# - allow only this helper through sudo;
+# - generate rules only for users that actually exist on the system;
+# - use command-specific !requiretty instead of broad Defaults:user rules.
+APP_DIR=/usr/clearos/apps/glpi_agent
+HELPER_SRC="$APP_DIR/deploy/glpi-agent-helper.sh"
+HELPER_DST=/usr/sbin/clearos-glpi-agent-helper
+SUDOERS_FILE=/etc/sudoers.d/clearos-glpi-agent
+
+if [ -f "$HELPER_SRC" ]; then
+    install -m 0755 -o root -g root "$HELPER_SRC" "$HELPER_DST" 2>/dev/null || true
+fi
+
+if [ -x "$HELPER_DST" ]; then
+    mkdir -p /etc/sudoers.d 2>/dev/null || true
+    TMP=$(mktemp /tmp/clearos-glpi-agent-sudoers.XXXXXX) || TMP=
+    if [ -n "$TMP" ]; then
+        {
+            echo "# ClearOS GLPI Agent app helper"
+            echo "Defaults!$HELPER_DST !requiretty"
+            echo "Defaults!$HELPER_DST lecture=never"
+            if id webconfig >/dev/null 2>&1; then
+                echo "webconfig ALL=(root) NOPASSWD: $HELPER_DST *"
+            fi
+            if id apache >/dev/null 2>&1; then
+                echo "apache ALL=(root) NOPASSWD: $HELPER_DST *"
+            fi
+            if id nobody >/dev/null 2>&1; then
+                echo "nobody ALL=(root) NOPASSWD: $HELPER_DST *"
+            fi
+        } > "$TMP"
+
+        if command -v visudo >/dev/null 2>&1; then
+            if visudo -cf "$TMP" >/dev/null 2>&1; then
+                install -m 0440 -o root -g root "$TMP" "$SUDOERS_FILE" 2>/dev/null || true
+            else
+                logger -p local6.err -t installer "app-glpi-agent - generated sudoers file is invalid"
+            fi
+        else
+            install -m 0440 -o root -g root "$TMP" "$SUDOERS_FILE" 2>/dev/null || true
+        fi
+        rm -f "$TMP"
+    fi
+fi
+
+if [ -d /etc/glpi-agent ] || rpm -q glpi-agent >/dev/null 2>&1; then
+    install -d -m 0755 -o root -g root /var/lib/glpi-agent 2>/dev/null || true
+fi
+
+# Remove obsolete service drop-in from earlier development builds.
+# It used PERL5OPT=-Mwarnings=-ambiguous to hide an old GLPI Agent warning,
+# but some Perl versions fail with:
+#   Unknown warnings category '-ambiguous'
+# Do not keep any PERL5OPT override for glpi-agent.service.
+if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
+    DROPIN_DIR=/etc/systemd/system/glpi-agent.service.d
+    DROPIN_FILE=$DROPIN_DIR/clearos-glpi-agent.conf
+    if [ -f "$DROPIN_FILE" ]; then
+        if grep -q 'PERL5OPT=.*ambiguous' "$DROPIN_FILE" 2>/dev/null; then
+            TS=$(date +%Y%m%d-%H%M%S)
+            mv "$DROPIN_FILE" "$DROPIN_FILE.bak-$TS" 2>/dev/null || rm -f "$DROPIN_FILE" 2>/dev/null || true
+            logger -p local6.notice -t installer "app-glpi-agent - removed obsolete PERL5OPT service drop-in"
+        fi
+    fi
+    rmdir "$DROPIN_DIR" 2>/dev/null || true
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+exit 0
