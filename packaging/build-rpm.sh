@@ -150,6 +150,18 @@ print_header() {
     echo "============================================================"
 }
 
+verify_spec_dependencies() {
+    echo
+    echo "🔎 Перевіряю RPM-залежності у spec ..."
+
+    if grep -Eq '^Requires:[[:space:]]+glpi-agent[[:space:]]*>=[[:space:]]*1\.17([[:space:]]|$)' "$SPEC_FILE"; then
+        echo "✅ Requires: glpi-agent >= 1.17"
+    else
+        echo "❌ У spec має бути залежність: Requires: glpi-agent >= 1.17" >&2
+        exit 1
+    fi
+}
+
 run_syntax_tests() {
     echo
     echo "🔎 Перевіряю PHP/Bash синтаксис ..."
@@ -185,6 +197,33 @@ prepare_rpmbuild_tree() {
     mkdir -p "$SOURCES_DIR" "$SPECS_DIR" "$RPMS_DIR" "$SRPMS_DIR" "$BUILD_DIR" "$BUILDROOT_DIR"
 }
 
+verify_source_tree() {
+    echo
+    echo "🔎 Перевіряю обов'язкові файли у source tree ..."
+
+    local required_files=(
+        "deploy/install"
+        "deploy/glpi-agent-helper.sh"
+        "libraries/Glpi_Agent.php"
+    )
+
+    local missing=0
+    local file
+    for file in "${required_files[@]}"; do
+        if [[ -f "$SOURCE_DIR/$file" ]]; then
+            echo "✅ $file"
+        else
+            echo "❌ Не знайдено у Source0: $file" >&2
+            missing=1
+        fi
+    done
+
+    if [[ "$missing" -ne 0 ]]; then
+        echo "❌ Source0 неповний. RPM не збираю." >&2
+        exit 1
+    fi
+}
+
 create_source_tarball() {
     echo
     echo "📦 Створюю Source0 tarball ..."
@@ -211,6 +250,8 @@ create_source_tarball() {
         cd "$SOURCE_DIR"
         tar -xf -
     )
+
+    verify_source_tree
 
     tar -C "$TMP_PARENT" -czf "$SOURCE_PATH" "${NAME}-${VERSION}"
 
@@ -250,6 +291,55 @@ build_rpm() {
     rpmbuild "${args[@]}" "$SPEC_WORK"
 }
 
+verify_built_rpm() {
+    echo
+    echo "🔎 Перевіряю зібраний RPM ..."
+
+    local rpm_file
+    rpm_file="$(find "$RPMS_DIR" -type f -name "${NAME}-${VERSION}-*.noarch.rpm" -print | sort | tail -n 1 || true)"
+
+    if [[ -z "$rpm_file" ]]; then
+        echo "❌ RPM не знайдено після збірки." >&2
+        exit 1
+    fi
+
+    echo "RPM для перевірки: $rpm_file"
+
+    if ! command -v rpm >/dev/null 2>&1; then
+        echo "⚠ Команду rpm не знайдено, пропускаю перевірку вмісту пакета."
+        return 0
+    fi
+
+    local listing
+    listing="$(rpm -qplv "$rpm_file")"
+
+    echo
+    echo "🔎 Важливі файли у RPM:"
+    printf '%s\n' "$listing" | grep -E '/usr/sbin/clearos-glpi-agent-helper|/usr/clearos/apps/glpi_agent/deploy/install|/usr/clearos/apps/glpi_agent/deploy/glpi-agent-helper.sh' || true
+
+    if ! printf '%s\n' "$listing" | grep -q '/usr/sbin/clearos-glpi-agent-helper$'; then
+        echo "❌ У RPM немає /usr/sbin/clearos-glpi-agent-helper" >&2
+        exit 1
+    fi
+
+    if ! printf '%s\n' "$listing" | grep -q '/usr/clearos/apps/glpi_agent/deploy/install$'; then
+        echo "❌ У RPM немає /usr/clearos/apps/glpi_agent/deploy/install" >&2
+        exit 1
+    fi
+
+    if ! printf '%s\n' "$listing" | awk '/\/usr\/sbin\/clearos-glpi-agent-helper$/ { if ($1 ~ /^-rwxr-xr-x/) found=1 } END { exit found ? 0 : 1 }'; then
+        echo "❌ Helper у RPM не має прав 0755 (-rwxr-xr-x)." >&2
+        exit 1
+    fi
+
+    if ! printf '%s\n' "$listing" | awk '/\/usr\/clearos\/apps\/glpi_agent\/deploy\/install$/ { if ($1 ~ /^-rwxr-xr-x/) found=1 } END { exit found ? 0 : 1 }'; then
+        echo "❌ deploy/install у RPM не має прав 0755 (-rwxr-xr-x)." >&2
+        exit 1
+    fi
+
+    echo "✅ RPM містить helper і deploy/install з правильними правами."
+}
+
 show_result() {
     echo
     echo "============================================================"
@@ -266,10 +356,16 @@ show_result() {
     echo
     echo "Для встановлення на ClearOS:"
     echo "  yum localinstall /path/to/${NAME}-${VERSION}-*.noarch.rpm"
+    echo
+    echo "Після встановлення можна швидко перевірити:"
+    echo "  ls -l /usr/sbin/clearos-glpi-agent-helper"
+    echo "  ls -l /usr/clearos/apps/glpi_agent/deploy/install"
+    echo "  sudo -n /usr/sbin/clearos-glpi-agent-helper check-certificate"
     echo "============================================================"
 }
 
 print_header
+verify_spec_dependencies
 
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
     run_syntax_tests
@@ -281,4 +377,5 @@ fi
 prepare_rpmbuild_tree
 create_source_tarball
 build_rpm
+verify_built_rpm
 show_result

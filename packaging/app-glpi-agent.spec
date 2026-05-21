@@ -1,6 +1,6 @@
 Name:           app-glpi-agent
 Version:        0.1.13
-Release:        1%{?dist}
+Release:        3%{?dist}
 Summary:        ClearOS GLPI Agent web interface
 
 License:        GPLv3
@@ -10,7 +10,7 @@ Source0:        https://github.com/snuglinux/app-glpi-agent/archive/refs/tags/%{
 BuildArch:      noarch
 Requires:       app-base
 Requires:       app-base-core
-Requires:       glpi-agent
+Requires:       glpi-agent >= 1.17
 Requires:       openssl
 Requires:       sudo
 Requires(post): systemd
@@ -47,39 +47,61 @@ else
     exit 1
 fi
 
-install -d -m 0755 %{buildroot}/var/clearos/glpi_agent
-install -d -m 0755 %{buildroot}/usr/sbin
-install -d -m 0750 %{buildroot}/etc/sudoers.d
+# Normalize executable bits inside the app tree. GitHub archives can preserve
+# file modes from git, but do not rely on that for package-critical scripts.
+if [ -f %{buildroot}/usr/clearos/apps/glpi_agent/deploy/install ]; then
+    chmod 0755 %{buildroot}/usr/clearos/apps/glpi_agent/deploy/install
+else
+    echo "ERROR: missing deploy/install" >&2
+    exit 1
+fi
 
 if [ -f %{buildroot}/usr/clearos/apps/glpi_agent/deploy/glpi-agent-helper.sh ]; then
-    install -m 0750 %{buildroot}/usr/clearos/apps/glpi_agent/deploy/glpi-agent-helper.sh %{buildroot}/usr/sbin/clearos-glpi-agent-helper
+    chmod 0755 %{buildroot}/usr/clearos/apps/glpi_agent/deploy/glpi-agent-helper.sh
 else
     echo "ERROR: missing deploy/glpi-agent-helper.sh" >&2
     exit 1
 fi
+
+install -d -m 0755 %{buildroot}/var/clearos/glpi_agent
+install -d -m 0755 %{buildroot}/usr/sbin
+install -d -m 0750 %{buildroot}/etc/sudoers.d
+
+install -m 0755 %{buildroot}/usr/clearos/apps/glpi_agent/deploy/glpi-agent-helper.sh %{buildroot}/usr/sbin/clearos-glpi-agent-helper
 
 cat > %{buildroot}/etc/sudoers.d/clearos-glpi-agent <<'EOF'
 # ClearOS GLPI Agent app helper
 Defaults!/usr/sbin/clearos-glpi-agent-helper !requiretty
 Defaults!/usr/sbin/clearos-glpi-agent-helper lecture=never
 webconfig ALL=(root) NOPASSWD: /usr/sbin/clearos-glpi-agent-helper *
+apache ALL=(root) NOPASSWD: /usr/sbin/clearos-glpi-agent-helper *
 nobody ALL=(root) NOPASSWD: /usr/sbin/clearos-glpi-agent-helper *
 EOF
 chmod 0440 %{buildroot}/etc/sudoers.d/clearos-glpi-agent
 
 %post
-/usr/clearos/apps/glpi_agent/deploy/install >/dev/null 2>&1 || :
+/bin/sh /usr/clearos/apps/glpi_agent/deploy/install >/dev/null 2>&1 || :
 
 %files
 %defattr(-,root,root,-)
 /usr/clearos/apps/glpi_agent
-/usr/sbin/clearos-glpi-agent-helper
+%attr(0755,root,root) /usr/sbin/clearos-glpi-agent-helper
 %config(noreplace) %attr(0440,root,root) /etc/sudoers.d/clearos-glpi-agent
 %dir /var/clearos/glpi_agent
 %ghost %config(noreplace) %attr(0644,root,root) /etc/glpi-agent/conf.d/glpi-agent.cfg
 %ghost %dir %attr(0755,root,root) /etc/glpi-agent/certs
 
 %changelog
+* Thu May 21 2026 SnugLinux <khvalera@ukr.net> - 0.1.13-3
+- Require glpi-agent >= 1.17.
+
+* Thu May 21 2026 SnugLinux <khvalera@ukr.net> - 0.1.13-2
+- Fix RPM packaging for /usr/sbin/clearos-glpi-agent-helper.
+- Install helper as 0755 so Webconfig is_executable() check succeeds.
+- Normalize deploy/install and deploy/glpi-agent-helper.sh executable bits during build.
+- Run deploy/install via /bin/sh in %%post so post-install does not depend on archive executable mode.
+- Add apache to static sudoers fallback.
+
 * Thu May 21 2026 SnugLinux <khvalera@ukr.net> - 0.1.13-1
 - Remove obsolete PERL5OPT=-Mwarnings=-ambiguous service drop-in.
 - Fix manual inventory and service start failures on Perl builds where -ambiguous is not a known warnings category.
