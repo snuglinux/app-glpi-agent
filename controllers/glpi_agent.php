@@ -135,6 +135,7 @@ class Glpi_Agent extends ClearOS_Controller
         $data['config_file'] = $this->glpi_agent->get_config_file();
         $data['config_warnings'] = $this->glpi_agent->get_config_warnings();
         $data['certificate_info'] = $this->glpi_agent->get_certificate_info();
+        $data['additional_oem_status'] = $this->glpi_agent->get_additional_oem_status();
 
         return $data;
     }

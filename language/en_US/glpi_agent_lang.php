@@ -3,7 +3,7 @@
 $lang['glpi_agent_app_name'] = 'GLPI Agent';
 $lang['glpi_agent_app_description'] = 'Configure and control the GLPI Agent inventory service.';
 $lang['glpi_agent_app_tooltip'] = 'GLPI Agent inventory service settings.';
-$lang['glpi_agent_help'] = 'This page shows and updates only the managed GLPI Agent configuration file in conf.d and controls the glpi-agent systemd service. Hardware UUID/serial data is not modified here.';
+$lang['glpi_agent_help'] = 'This page shows and updates only the managed GLPI Agent configuration file in conf.d and controls the glpi-agent systemd service. Hardware UUID/serial data can be normalized through glpi-additional-oem when enabled.';
 $lang['glpi_agent_service'] = 'GLPI Agent Service';
 $lang['glpi_agent_unit'] = 'Systemd Unit';
 $lang['glpi_agent_version'] = 'Agent Version';
@@ -64,6 +64,7 @@ $lang['glpi_agent_logfile_reminder'] = 'is used only when logging type is switch
 $lang['glpi_agent_show'] = 'Show';
 $lang['glpi_agent_hide'] = 'Hide';
 $lang['glpi_agent_copy'] = 'Copy';
+$lang['glpi_agent_copy_serial'] = 'Скопіювати';
 $lang['glpi_agent_copy_fingerprint'] = '📋 Copy fingerprint';
 $lang['glpi_agent_copied'] = 'Copied to clipboard.';
 
@@ -79,3 +80,14 @@ $lang['glpi_agent_certificate_status'] = 'Certificate Status';
 $lang['glpi_agent_certificate_valid_until'] = 'Valid until';
 $lang['glpi_agent_certificate_san_missing'] = 'SAN was not found. It works now, but DNS:glpi.lan is recommended in the certificate.';
 $lang['glpi_agent_certificate_missing'] = 'Certificate file has not been created yet or is not readable.';
+
+$lang['glpi_agent_additional_oem_enabled'] = 'Використовувати glpi-additional-oem';
+$lang['glpi_agent_additional_oem_warning_enable'] = 'Виявлено підозрілі OEM/DMI serial або UUID. Рекомендовано використовувати glpi-additional-oem, щоб GLPI не оновлював неправильний інвентарний елемент.';
+$lang['glpi_agent_additional_oem_warning_review_disable'] = 'DMI serial/UUID виглядають придатними, але glpi-additional-oem увімкнений. Якщо материнську плату замінили на таку, що має коректні DMI-дані, перевір чи OEM additional-content ще потрібен.';
+$lang['glpi_agent_additional_oem_status'] = 'OEM Additional Content';
+$lang['glpi_agent_dmi_identity'] = 'DMI / OEM ідентифікація';
+$lang['glpi_agent_dmi_suspicious'] = 'Підозріле';
+$lang['glpi_agent_dmi_ok'] = 'OK';
+
+$lang['glpi_agent_serial_number'] = 'Серійний номер';
+$lang['glpi_agent_additional_information'] = 'Додаткова інформація';

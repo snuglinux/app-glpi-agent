@@ -28,6 +28,7 @@ The app is intentionally conservative: it manages only its own GLPI Agent config
 - Controls `glpi-agent.service` from the standard ClearOS service widget.
 - Runs manual inventory from Webconfig through a fixed privileged helper.
 - Keeps old managed config backups under control.
+- Integrates with `glpi-additional-oem` to manage OEM additional-content for systems with invalid DMI serials or template UUIDs.
 
 ## Requirements
 
@@ -35,6 +36,8 @@ The app is intentionally conservative: it manages only its own GLPI Agent config
 - `app-base`
 - `app-base-core`
 - `glpi-agent >= 1.17`
+- `glpi-additional-oem >= 0.1.4`
+- `glpi-additional-oem >= 0.1.3`
 - `openssl`
 - `sudo`
 - `systemd`
@@ -43,6 +46,7 @@ The RPM spec enforces:
 
 ```spec
 Requires:       glpi-agent >= 1.17
+Requires:       glpi-additional-oem >= 0.1.3
 ```
 
 ## Managed configuration
@@ -71,6 +75,43 @@ debug = 0
 no-httpd = yes
 ca-cert-file = /etc/glpi-agent/certs/glpi.lan.pem
 ```
+
+## OEM additional-content workflow
+
+The app depends on `glpi-additional-oem` and can enable or disable its use from Webconfig.
+
+The toggle controls this line in:
+
+```text
+/etc/glpi-agent/conf.d/20-additional-oem.cfg
+```
+
+Enabled:
+
+```ini
+additional-content = /run/glpi-agent/additional-content.json
+```
+
+Disabled:
+
+```ini
+# additional-content = /run/glpi-agent/additional-content.json
+```
+
+On page load, the app shows the serial number used for GLPI search and can expand additional DMI/OEM identity data such as:
+
+```text
+sys_vendor
+product_name
+product_serial
+product_uuid
+board_vendor
+board_name
+board_serial
+primary_mac
+```
+
+If DMI serial/UUID values look suspicious and `glpi-additional-oem` is disabled, Webconfig shows a warning recommending enabling OEM additional-content. If DMI values look usable while it is enabled, Webconfig shows a soft reminder to review whether it is still needed.
 
 ## SSL certificate workflow
 
@@ -107,6 +148,9 @@ Webconfig uses a small fixed helper for operations that must run as root:
 The helper is limited to fixed actions:
 
 ```text
+additional-oem-enable
+additional-oem-disable
+additional-oem-status
 run-now
 start
 stop
@@ -157,56 +201,3 @@ Unknown warnings category '-ambiguous'
 ```
 
 The helper only filters the old warning line from Webconfig manual-inventory output when an unpatched agent is still installed.
-
-## Build RPM
-
-Build from the repository root:
-
-```bash
-./packaging/build-rpm.sh --nodeps
-```
-
-The build script creates a local Source0 tarball, uses a temporary spec copy with local Source0, checks required source files, and verifies that the built RPM contains the helper with correct executable permissions.
-
-Expected RPM location:
-
-```text
-~/rpmbuild/RPMS/noarch/app-glpi-agent-*.noarch.rpm
-```
-
-Install on ClearOS:
-
-```bash
-yum localinstall app-glpi-agent-*.noarch.rpm
-```
-
-Quick post-install checks:
-
-```bash
-ls -l /usr/sbin/clearos-glpi-agent-helper
-ls -l /usr/clearos/apps/glpi_agent/deploy/install
-sudo -n /usr/sbin/clearos-glpi-agent-helper check-certificate
-```
-
-## Repository layout
-
-```text
-controllers/      ClearOS Webconfig controllers
-deploy/           install script and privileged helper
-htdocs/           static Webconfig assets
-language/         translations
-libraries/        GLPI Agent integration logic
-packaging/        RPM spec and build helper
-views/            Webconfig views
-images/           README screenshots
-```
-
-## Scope and safety notes
-
-The app currently does **not** manage hardware UUID/serial overrides and does **not** edit plugin `.local` files.
-
-It is designed to avoid changing package-owned GLPI Agent files and to keep all managed settings in:
-
-```text
-/etc/glpi-agent/conf.d/glpi-agent.cfg
-```

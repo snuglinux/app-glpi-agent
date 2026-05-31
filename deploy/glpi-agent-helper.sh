@@ -10,6 +10,9 @@ set -euo pipefail
 SERVICE="glpi-agent.service"
 AGENT="/usr/bin/glpi-agent"
 CONFIG="/etc/glpi-agent/conf.d/glpi-agent.cfg"
+ADDITIONAL_OEM_CONFIG="/etc/glpi-agent/conf.d/20-additional-oem.cfg"
+ADDITIONAL_OEM_JSON="/run/glpi-agent/additional-content.json"
+ADDITIONAL_OEM_COMMAND="/usr/lib/glpi-agent/glpi-additional-oem"
 CERT_DIR="/etc/glpi-agent/certs"
 STORAGE_DIR="/var/lib/glpi-agent"
 TIMEOUT="/usr/bin/timeout"
@@ -60,6 +63,120 @@ cleanup_config_backups() {
             [ -n "$file" ] || continue
             rm -f "$file" 2>/dev/null || true
         done
+    fi
+}
+
+ensure_additional_oem_config() {
+    install -d -m 0755 -o root -g root "$(dirname "$ADDITIONAL_OEM_CONFIG")"
+
+    if [ ! -e "$ADDITIONAL_OEM_CONFIG" ]; then
+        cat > "$ADDITIONAL_OEM_CONFIG" <<EOF2
+# GLPI Agent additional OEM identity content
+# Managed by glpi-additional-oem / app-glpi-agent
+additional-content = $ADDITIONAL_OEM_JSON
+EOF2
+        chown root:root "$ADDITIONAL_OEM_CONFIG" 2>/dev/null || true
+        chmod 0644 "$ADDITIONAL_OEM_CONFIG" 2>/dev/null || true
+    fi
+}
+
+set_additional_oem_config() {
+    local mode="$1"
+    local enabled=0
+    local tmp backup
+
+    [ "$mode" = "enable" ] && enabled=1
+
+    ensure_additional_oem_config
+
+    tmp="$(mktemp /tmp/glpi-additional-oem-cfg.XXXXXX)"
+    backup="$ADDITIONAL_OEM_CONFIG.bak-$(date +%Y%m%d-%H%M%S)"
+    cp -a "$ADDITIONAL_OEM_CONFIG" "$backup" 2>/dev/null || true
+
+    awk -v enabled="$enabled" -v json="$ADDITIONAL_OEM_JSON" '
+        BEGIN { found = 0 }
+        /^[[:space:]]*#?[[:space:]]*additional-content[[:space:]]*=/ {
+            line = $0
+            sub(/^[[:space:]]*#?[[:space:]]*/, "", line)
+            if (line ~ "^additional-content[[:space:]]*=[[:space:]]*" json "[[:space:]]*$") {
+                if (enabled == 1)
+                    print "additional-content = " json
+                else
+                    print "# additional-content = " json
+                found = 1
+                next
+            }
+        }
+        { print }
+        END {
+            if (!found) {
+                if (enabled == 1)
+                    print "additional-content = " json
+                else
+                    print "# additional-content = " json
+            }
+        }
+    ' "$ADDITIONAL_OEM_CONFIG" > "$tmp"
+
+    install -m 0644 -o root -g root "$tmp" "$ADDITIONAL_OEM_CONFIG"
+    rm -f "$tmp"
+}
+
+additional_oem_enable() {
+    set_additional_oem_config enable
+
+    if [ -x "$ADDITIONAL_OEM_COMMAND" ]; then
+        "$ADDITIONAL_OEM_COMMAND" --only-if-enabled || true
+    fi
+
+    log "glpi-additional-oem увімкнено."
+    restart_service_if_running
+}
+
+additional_oem_disable() {
+    set_additional_oem_config disable
+    rm -f "$ADDITIONAL_OEM_JSON" 2>/dev/null || true
+
+    log "glpi-additional-oem вимкнено."
+    restart_service_if_running
+}
+
+additional_oem_status() {
+    log "CONFIG  : $ADDITIONAL_OEM_CONFIG"
+    log "JSON    : $ADDITIONAL_OEM_JSON"
+    log "COMMAND : $ADDITIONAL_OEM_COMMAND"
+
+    if [ -x "$ADDITIONAL_OEM_COMMAND" ]; then
+        log "PACKAGE : installed"
+    else
+        log "PACKAGE : missing"
+    fi
+
+    if [ -f "$ADDITIONAL_OEM_CONFIG" ] && awk -v json="$ADDITIONAL_OEM_JSON" '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*additional-content[[:space:]]*=/ {
+            value = $0
+            sub(/^[[:space:]]*additional-content[[:space:]]*=[[:space:]]*/, "", value)
+            sub(/[[:space:]]*$/, "", value)
+            if (value == json) found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$ADDITIONAL_OEM_CONFIG"; then
+        log "ENABLED : yes"
+    else
+        log "ENABLED : no"
+    fi
+
+    if [ -s "$ADDITIONAL_OEM_JSON" ]; then
+        log "RUNTIME : exists"
+    else
+        log "RUNTIME : missing"
+    fi
+}
+
+run_additional_oem_if_enabled() {
+    if [ -x "$ADDITIONAL_OEM_COMMAND" ]; then
+        "$ADDITIONAL_OEM_COMMAND" --only-if-enabled || log "Попередження: glpi-additional-oem завершився з помилкою."
     fi
 }
 
@@ -254,6 +371,8 @@ run_now() {
         exit 1
     fi
 
+    run_additional_oem_if_enabled
+
     log "Запускаю інвентаризацію GLPI Agent..."
     run_agent_force
     rc=$?
@@ -401,6 +520,15 @@ restart_service_if_running() {
 }
 
 case "${1:-}" in
+    additional-oem-enable)
+        additional_oem_enable
+        ;;
+    additional-oem-disable)
+        additional_oem_disable
+        ;;
+    additional-oem-status)
+        additional_oem_status
+        ;;
     run-now)
         run_now
         ;;
@@ -422,7 +550,7 @@ case "${1:-}" in
         check_certificate "${1:-}"
         ;;
     *)
-        log "Usage: $0 {run-now|start|stop|restart-if-running|update-certificate|check-certificate}"
+        log "Usage: $0 {additional-oem-enable|additional-oem-disable|additional-oem-status|run-now|start|stop|restart-if-running|update-certificate|check-certificate}"
         exit 2
         ;;
 esac

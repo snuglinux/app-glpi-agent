@@ -27,6 +27,8 @@ if (! isset($certificate_output))
     $certificate_output = '';
 if (! isset($certificate_status))
     $certificate_status = '';
+if (! isset($additional_oem_status))
+    $additional_oem_status = array();
 
 $server = isset($settings['SERVER']) ? $settings['SERVER'] : 'https://glpi.lan/front/inventory.php';
 $ssl_mode = isset($settings['SSL_MODE']) ? $settings['SSL_MODE'] : 'ca_cert';
@@ -41,6 +43,7 @@ $logger = isset($settings['LOGGER']) ? $settings['LOGGER'] : 'syslog';
 $logfile = isset($settings['LOGFILE']) ? $settings['LOGFILE'] : '/var/log/glpi-agent.log';
 $debug = isset($settings['DEBUG']) ? $settings['DEBUG'] : '0';
 $tag = isset($settings['TAG']) ? $settings['TAG'] : '';
+$additional_oem_enabled = isset($settings['ADDITIONAL_OEM_ENABLED']) && $settings['ADDITIONAL_OEM_ENABLED'] === '1';
 
 if (! function_exists('glpi_agent_settings_escape')) {
     function glpi_agent_settings_escape($value)
@@ -84,6 +87,14 @@ echo infobox_highlight(
     lang('glpi_agent_help')
 );
 
+if (is_array($additional_oem_status) && ! empty($additional_oem_status)) {
+    $recommendation = isset($additional_oem_status['recommendation']) ? $additional_oem_status['recommendation'] : 'ok';
+    if ($recommendation === 'enable')
+        echo infobox_warning(lang('base_warning'), glpi_agent_settings_escape(lang('glpi_agent_additional_oem_warning_enable')));
+    else if ($recommendation === 'review_disable')
+        echo infobox_highlight(lang('base_information'), glpi_agent_settings_escape(lang('glpi_agent_additional_oem_warning_review_disable')));
+}
+
 if ($fingerprint_generated)
     echo infobox_highlight(lang('base_information'), lang('glpi_agent_fingerprint_generated'));
 
@@ -105,7 +116,7 @@ echo field_input('SERVER', $server, lang('glpi_agent_server_url'), FALSE);
 echo field_dropdown('SSL_MODE', $ssl_mode_options, $ssl_mode, lang('glpi_agent_ssl_mode'), FALSE);
 
 // Keep mode-specific values in the form, but show them only when the selected
-// SSL mode uses them.  This avoids confusing stale fingerprint/certificate
+// SSL mode uses them. This avoids confusing stale fingerprint/certificate
 // fields when switching between SSL modes.
 echo '<div id="glpi-agent-ca-cert-section" class="glpi-agent-ssl-dependent"' . $ca_cert_style . '>';
 echo form_hidden('CA_CERT_FILE', $ca_cert_file);
@@ -130,6 +141,8 @@ echo '</div>';
 echo '</div>';
 
 echo field_input('TAG', $tag, lang('glpi_agent_tag'), FALSE);
+echo field_toggle_enable_disable('ADDITIONAL_OEM_ENABLED', $additional_oem_enabled, lang('glpi_agent_additional_oem_enabled'));
+
 echo field_toggle_enable_disable('HTTPD_ENABLED', $httpd_enabled, lang('glpi_agent_httpd_enabled'));
 echo field_input('HTTPD_IP', $httpd_ip, lang('glpi_agent_httpd_ip'), FALSE);
 echo field_input('HTTPD_PORT', $httpd_port, lang('glpi_agent_httpd_port'), FALSE);

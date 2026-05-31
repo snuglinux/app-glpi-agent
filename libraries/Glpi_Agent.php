@@ -65,6 +65,11 @@ class Glpi_Agent extends Daemon
     const SERVICE_UNIT = 'glpi-agent.service';
     const COMMAND_AGENT = '/usr/bin/glpi-agent';
     const COMMAND_HELPER = '/usr/sbin/clearos-glpi-agent-helper';
+    const COMMAND_ADDITIONAL_OEM = '/usr/lib/glpi-agent/glpi-additional-oem';
+    const FILE_ADDITIONAL_OEM_CONFIG = '/etc/glpi-agent/conf.d/20-additional-oem.cfg';
+    const FILE_ADDITIONAL_OEM_JSON = '/run/glpi-agent/additional-content.json';
+    const FILE_BAD_UUIDS = '/etc/glpi-additional-oem/bad-uuids.list';
+    const FILE_BAD_VALUES = '/etc/glpi-additional-oem/bad-values.list';
     const CONFIG_BACKUP_KEEP = 2;
 
     ///////////////////////////////////////////////////////////////////////////
@@ -212,7 +217,7 @@ class Glpi_Agent extends Daemon
 
         $warnings = array();
 
-        // Do not show the normal conf.d include status in the UI.  Only warn
+        // Do not show the normal conf.d include status in the UI. Only warn
         // when the managed file would not be loaded by the agent.
         if (! $this->is_conf_d_included())
             $warnings[] = lang('glpi_agent_warning_conf_d_disabled');
@@ -246,7 +251,15 @@ class Glpi_Agent extends Daemon
         if ($normalized['SSL_MODE'] === 'ca_cert' && $normalized['CA_CERT_FILE'] === '')
             $normalized['CA_CERT_FILE'] = $this->_get_default_ca_cert_file($normalized['SERVER']);
 
+        $additional_oem_was_enabled = $this->is_additional_oem_enabled();
+        $additional_oem_should_be_enabled = ($normalized['ADDITIONAL_OEM_ENABLED'] === '1');
+
         $this->_write_config($normalized);
+
+        if ($additional_oem_was_enabled !== $additional_oem_should_be_enabled)
+            $this->_set_additional_oem_enabled($additional_oem_should_be_enabled);
+
+        $normalized['ADDITIONAL_OEM_ENABLED'] = $this->is_additional_oem_enabled() ? '1' : '0';
         $this->settings = $normalized;
         $this->is_loaded = TRUE;
     }
@@ -482,7 +495,7 @@ class Glpi_Agent extends Daemon
             throw new Engine_Exception(lang('glpi_agent_not_installed'), CLEAROS_ERROR);
 
         // Run through a small sudo helper, like the app-zabbix2 pattern for
-        // privileged Webconfig operations.  Running glpi-agent directly from
+        // privileged Webconfig operations. Running glpi-agent directly from
         // Webconfig can fail because the agent needs write access to
         // /var/lib/glpi-agent.
         $result = $this->_run_helper('run-now', FALSE);
@@ -495,7 +508,7 @@ class Glpi_Agent extends Daemon
      *
      * @param string $server optional server URL
      *
-     * @return string command output
+     * @return array command output and exit code
      * @throws Engine_Exception
      */
 
@@ -522,7 +535,7 @@ class Glpi_Agent extends Daemon
      *
      * @param string $server optional server URL
      *
-     * @return string command output
+     * @return array command output and exit code
      * @throws Engine_Exception
      */
 
@@ -595,6 +608,81 @@ class Glpi_Agent extends Daemon
         }
 
         return $info;
+    }
+
+    /**
+     * Returns TRUE when OEM additional-content is enabled.
+     *
+     * @return boolean enabled
+     */
+
+    public function is_additional_oem_enabled()
+    {
+        clearos_profile(__METHOD__, __LINE__);
+
+        return $this->_is_additional_oem_enabled();
+    }
+
+    /**
+     * Returns DMI/OEM additional-content status.
+     *
+     * @return array status
+     */
+
+    public function get_additional_oem_status()
+    {
+        clearos_profile(__METHOD__, __LINE__);
+
+        $dmi_fields = array(
+            'sys_vendor',
+            'product_name',
+            'product_serial',
+            'product_uuid',
+            'board_vendor',
+            'board_name',
+            'board_serial',
+        );
+
+        $dmi = array();
+        foreach ($dmi_fields as $field) {
+            $value = $this->_read_dmi($field);
+            $bad = ($field === 'product_uuid') ? $this->_is_bad_uuid($value) : $this->_is_bad_oem_value($field, $value);
+            $dmi[$field] = array(
+                'value' => $value,
+                'bad' => $bad,
+            );
+        }
+
+        $primary_mac = $this->_get_primary_physical_mac();
+        $primary_mac_bad = $this->_is_bad_mac($primary_mac);
+        $serial_bad = $dmi['product_serial']['bad'] && $dmi['board_serial']['bad'];
+        $uuid_bad = $dmi['product_uuid']['bad'];
+        $suspicious = ($serial_bad && $uuid_bad);
+        $enabled = $this->_is_additional_oem_enabled();
+
+        $json = $this->_read_additional_oem_json_values();
+        $serial_number = $this->_get_glpi_serial_number($enabled, $dmi, $json, $primary_mac);
+
+        $recommendation = 'ok';
+        if ($suspicious && ! $enabled)
+            $recommendation = 'enable';
+        else if (! $suspicious && $enabled)
+            $recommendation = 'review_disable';
+
+        return array(
+            'installed' => is_executable(self::COMMAND_ADDITIONAL_OEM),
+            'enabled' => $enabled,
+            'config_file' => self::FILE_ADDITIONAL_OEM_CONFIG,
+            'json_file' => self::FILE_ADDITIONAL_OEM_JSON,
+            'json_exists' => file_exists(self::FILE_ADDITIONAL_OEM_JSON),
+            'serial_number' => $serial_number,
+            'json' => $json,
+            'primary_mac' => $primary_mac,
+            'primary_mac_bad' => $primary_mac_bad,
+            'dmi' => $dmi,
+            'suspicious' => $suspicious,
+            'recommendation' => $recommendation,
+        );
     }
 
     /**
@@ -738,6 +826,7 @@ class Glpi_Agent extends Daemon
         }
 
         $this->settings = $this->_normalize_settings($settings);
+        $this->settings['ADDITIONAL_OEM_ENABLED'] = $this->is_additional_oem_enabled() ? '1' : '0';
         $this->is_loaded = TRUE;
     }
 
@@ -762,6 +851,7 @@ class Glpi_Agent extends Daemon
             'LOGFILE' => self::FILE_LOG_DEFAULT,
             'DEBUG' => '0',
             'TAG' => '',
+            'ADDITIONAL_OEM_ENABLED' => '0',
         );
     }
 
@@ -803,6 +893,7 @@ class Glpi_Agent extends Daemon
             $settings['CA_CERT_FILE'] = $this->_get_default_ca_cert_file($settings['SERVER']);
 
         $settings['NO_HTTPD'] = $this->_is_enabled_value($settings['NO_HTTPD']) ? '1' : '0';
+        $settings['ADDITIONAL_OEM_ENABLED'] = $this->_is_enabled_value($settings['ADDITIONAL_OEM_ENABLED']) ? '1' : '0';
 
         if ($settings['LOGFILE'] === '')
             $settings['LOGFILE'] = self::FILE_LOG_DEFAULT;
@@ -971,6 +1062,315 @@ class Glpi_Agent extends Daemon
     }
 
     /**
+     * Enables or disables glpi-additional-oem through the privileged helper.
+     *
+     * @param boolean $enabled enabled
+     *
+     * @return void
+     */
+
+    protected function _set_additional_oem_enabled($enabled)
+    {
+        $this->_run_helper($enabled ? 'additional-oem-enable' : 'additional-oem-disable', FALSE);
+    }
+
+    /**
+     * Checks active OEM additional-content config line.
+     *
+     * @return boolean enabled
+     */
+
+    protected function _is_additional_oem_enabled()
+    {
+        if (! file_exists(self::FILE_ADDITIONAL_OEM_CONFIG))
+            return FALSE;
+
+        $lines = @file(self::FILE_ADDITIONAL_OEM_CONFIG, FILE_IGNORE_NEW_LINES);
+        if (! is_array($lines))
+            return FALSE;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || preg_match('/^#/', $line))
+                continue;
+            if (preg_match('#^additional-content\s*=\s*' . preg_quote(self::FILE_ADDITIONAL_OEM_JSON, '#') . '\s*$#', $line))
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    protected function _get_glpi_serial_number($additional_oem_enabled, $dmi, $json, $primary_mac = '')
+    {
+        if ($additional_oem_enabled) {
+            if (is_array($json) && ! empty($json['ssn']))
+                return $json['ssn'];
+
+            return $this->_make_oem_serial_from_dmi($dmi, $primary_mac);
+        }
+
+        if (isset($dmi['product_serial']['value']) && empty($dmi['product_serial']['bad']))
+            return trim((string) $dmi['product_serial']['value']);
+
+        if (isset($dmi['board_serial']['value']) && empty($dmi['board_serial']['bad']))
+            return trim((string) $dmi['board_serial']['value']);
+
+        return '';
+    }
+
+    protected function _make_oem_serial_from_dmi($dmi, $primary_mac)
+    {
+        $primary_mac = strtoupper(trim((string) $primary_mac));
+        if ($this->_is_bad_mac($primary_mac))
+            return '';
+
+        $mac = str_replace(':', '', $primary_mac);
+
+        $vendor = isset($dmi['sys_vendor']['value']) ? trim((string) $dmi['sys_vendor']['value']) : '';
+        if ($this->_is_bad_oem_value('sys_vendor', $vendor))
+            $vendor = isset($dmi['board_vendor']['value']) ? trim((string) $dmi['board_vendor']['value']) : '';
+
+        $board = isset($dmi['board_name']['value']) ? trim((string) $dmi['board_name']['value']) : '';
+
+        if ($this->_is_bad_oem_value('sys_vendor', $vendor) || $this->_is_bad_oem_value('board_name', $board))
+            return 'OEM-MAC-' . $mac;
+
+        return 'OEM-' . $this->_vendor_alias($vendor) . '-' . $this->_sanitize_oem_token($board) . '-' . $mac;
+    }
+
+    protected function _vendor_alias($vendor)
+    {
+        $vendor_upper = strtoupper((string) $vendor);
+
+        if (strpos($vendor_upper, 'GIGABYTE') !== FALSE)
+            return 'GIGABYTE';
+        if (strpos($vendor_upper, 'ASUSTEK') !== FALSE || strpos($vendor_upper, 'ASUS') !== FALSE)
+            return 'ASUS';
+        if (strpos($vendor_upper, 'MICRO-STAR') !== FALSE || strpos($vendor_upper, 'MSI') !== FALSE)
+            return 'MSI';
+        if (strpos($vendor_upper, 'HEWLETT') !== FALSE || strpos($vendor_upper, 'HP') !== FALSE)
+            return 'HP';
+        if (strpos($vendor_upper, 'LENOVO') !== FALSE)
+            return 'LENOVO';
+        if (strpos($vendor_upper, 'DELL') !== FALSE)
+            return 'DELL';
+        if (strpos($vendor_upper, 'ACER') !== FALSE)
+            return 'ACER';
+
+        return $this->_sanitize_oem_token($vendor);
+    }
+
+    protected function _sanitize_oem_token($value)
+    {
+        $value = strtoupper((string) $value);
+        $value = preg_replace('/[^A-Z0-9]+/', '-', $value);
+        $value = preg_replace('/-+/', '-', $value);
+        $value = trim($value, '-');
+
+        return $value;
+    }
+
+    protected function _read_additional_oem_json_values()
+    {
+        $values = array(
+            'ssn' => '',
+            'msn' => '',
+            'uuid' => '',
+        );
+
+        if (! is_readable(self::FILE_ADDITIONAL_OEM_JSON))
+            return $values;
+
+        $raw = @file_get_contents(self::FILE_ADDITIONAL_OEM_JSON);
+        if ($raw === FALSE || trim($raw) === '')
+            return $values;
+
+        $json = json_decode($raw, TRUE);
+        if (! is_array($json) || empty($json['content']) || ! is_array($json['content']))
+            return $values;
+
+        if (! empty($json['content']['bios']) && is_array($json['content']['bios'])) {
+            if (isset($json['content']['bios']['ssn']))
+                $values['ssn'] = trim((string) $json['content']['bios']['ssn']);
+            if (isset($json['content']['bios']['msn']))
+                $values['msn'] = trim((string) $json['content']['bios']['msn']);
+        }
+
+        if (! empty($json['content']['hardware']) && is_array($json['content']['hardware'])) {
+            if (isset($json['content']['hardware']['uuid']))
+                $values['uuid'] = trim((string) $json['content']['hardware']['uuid']);
+        }
+
+        return $values;
+    }
+
+    protected function _read_dmi($field)
+    {
+        if (! preg_match('/^[A-Za-z0-9_]+$/', $field))
+            return '';
+
+        $path = '/sys/class/dmi/id/' . $field;
+        if (! is_readable($path))
+            return '';
+
+        $value = @file_get_contents($path);
+        if ($value === FALSE)
+            return '';
+
+        $value = str_replace("\0", '', $value);
+        $value = trim($value);
+
+        return $value;
+    }
+
+    protected function _get_primary_physical_mac()
+    {
+        $paths = glob('/sys/class/net/*');
+        if (! is_array($paths))
+            return '';
+
+        sort($paths);
+        $fallback = '';
+
+        foreach ($paths as $path) {
+            $iface = basename($path);
+            if (preg_match('/^(lo|docker|br-|virbr|veth|tun|tap|wg|tailscale|zt|vmnet|vboxnet|cni|flannel|kube|podman|dummy|ifb)/', $iface))
+                continue;
+            if (! is_readable($path . '/address'))
+                continue;
+
+            $mac = strtoupper(trim((string) @file_get_contents($path . '/address')));
+            if ($this->_is_bad_mac($mac))
+                continue;
+
+            if (file_exists($path . '/device'))
+                return $mac;
+
+            if ($fallback === '')
+                $fallback = $mac;
+        }
+
+        return $fallback;
+    }
+
+    protected function _is_bad_mac($mac)
+    {
+        $mac = strtoupper(trim((string) $mac));
+
+        if ($mac === '')
+            return TRUE;
+        if (! preg_match('/^[0-9A-F]{2}(:[0-9A-F]{2}){5}$/', $mac))
+            return TRUE;
+        if ($mac === '00:00:00:00:00:00' || $mac === 'FF:FF:FF:FF:FF:FF')
+            return TRUE;
+
+        $first_octet = hexdec(substr($mac, 0, 2));
+        if (($first_octet & 1) === 1)
+            return TRUE;
+
+        return FALSE;
+    }
+
+    protected function _is_bad_uuid($value)
+    {
+        $value = strtolower(trim((string) $value));
+        if ($value === '')
+            return TRUE;
+
+        if ($this->_is_bad_oem_value('product_uuid', $value))
+            return TRUE;
+
+        if ($this->_bad_list_contains(self::FILE_BAD_UUIDS, 'product_uuid', $value))
+            return TRUE;
+
+        if (! preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $value))
+            return TRUE;
+
+        return FALSE;
+    }
+
+    protected function _is_bad_oem_value($field, $value)
+    {
+        $value = trim((string) $value);
+        if ($value === '')
+            return TRUE;
+
+        $lower = strtolower($value);
+        $bad_values = array(
+            'oem',
+            'default string',
+            'to be filled by o.e.m.',
+            'to be filled by oem',
+            'system serial number',
+            'chassis serial number',
+            'base board serial number',
+            'none',
+            'unknown',
+            'not specified',
+            'not available',
+            'no asset information',
+            'n/a',
+            'na',
+            'null',
+            '00000000-0000-0000-0000-000000000000',
+            'ffffffff-ffff-ffff-ffff-ffffffffffff',
+        );
+
+        if (in_array($lower, $bad_values, TRUE))
+            return TRUE;
+        if (preg_match('/^0+$/', $lower) || preg_match('/^f+$/', $lower) || preg_match('/^x+$/', $lower))
+            return TRUE;
+
+        return $this->_bad_list_contains(self::FILE_BAD_VALUES, $field, $value);
+    }
+
+    protected function _bad_list_contains($file, $field, $value)
+    {
+        if (! is_readable($file))
+            return FALSE;
+
+        $value = trim((string) $value);
+        $field = strtolower(trim((string) $field));
+        $lower = strtolower($value);
+        $lines = @file($file, FILE_IGNORE_NEW_LINES);
+        if (! is_array($lines))
+            return FALSE;
+
+        foreach ($lines as $line) {
+            $line = trim(preg_replace('/#.*$/', '', $line));
+            if ($line === '')
+                continue;
+
+            if (preg_match('/^([A-Za-z0-9_\-]+)=(.*)$/', $line, $matches)) {
+                if (strtolower($matches[1]) !== $field)
+                    continue;
+                if (strtolower(trim($matches[2])) === $lower)
+                    return TRUE;
+                continue;
+            }
+
+            if (preg_match('/^([A-Za-z0-9_\-]+):\/(.*)\/$/', $line, $matches)) {
+                if (strtolower($matches[1]) !== $field)
+                    continue;
+                if (@preg_match('/' . str_replace('/', '\/', $matches[2]) . '/i', $value))
+                    return TRUE;
+                continue;
+            }
+
+            if (preg_match('/^\/(.*)\/$/', $line, $matches)) {
+                if (@preg_match('/' . str_replace('/', '\/', $matches[1]) . '/i', $value))
+                    return TRUE;
+                continue;
+            }
+
+            if (strtolower($line) === $lower)
+                return TRUE;
+        }
+
+        return FALSE;
+    }
+
+    /**
      * Runs privileged helper through sudo.
      *
      * @param string  $action        helper action
@@ -984,14 +1384,14 @@ class Glpi_Agent extends Daemon
     {
         clearos_profile(__METHOD__, __LINE__);
 
-        if (! preg_match('/^(run-now|start|stop|restart-if-running|update-certificate|check-certificate)$/', $action))
+        if (! preg_match('/^(additional-oem-enable|additional-oem-disable|additional-oem-status|run-now|start|stop|restart-if-running|update-certificate|check-certificate)$/', $action))
             throw new Engine_Exception('Invalid helper action', CLEAROS_ERROR);
 
         if (! is_file(self::COMMAND_HELPER) || ! is_executable(self::COMMAND_HELPER))
             throw new Engine_Exception(self::COMMAND_HELPER . ' not found or not executable. Run /usr/clearos/apps/glpi_agent/deploy/install', CLEAROS_ERROR);
 
         // Use the same practical pattern as app-zabbix-agent2: execute the
-        // fixed privileged helper via sudo from PHP.  Do not use ClearOS Shell
+        // fixed privileged helper via sudo from PHP. Do not use ClearOS Shell
         // here: on Webconfig it can still trigger sudo askpass/tty handling even
         // when a NOPASSWD helper rule exists.
         $sudo = is_executable('/usr/bin/sudo') ? '/usr/bin/sudo' : '/bin/sudo';

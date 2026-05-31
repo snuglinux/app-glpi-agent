@@ -122,6 +122,7 @@ class Settings extends ClearOS_Controller
             $data['fingerprint_generated'] = $fingerprint_generated;
             $data['certificate_output'] = $certificate_output;
             $data['certificate_status'] = $certificate_status;
+            $data['additional_oem_status'] = $this->glpi_agent->get_additional_oem_status();
         } catch (Exception $e) {
             $this->page->view_exception($e);
             return;
@@ -156,6 +157,7 @@ class Settings extends ClearOS_Controller
             'LOGFILE' => '',
             'DEBUG' => trim((string) $this->input->post('DEBUG')),
             'TAG' => trim((string) $this->input->post('TAG')),
+            'ADDITIONAL_OEM_ENABLED' => $this->input->post('ADDITIONAL_OEM_ENABLED') ? '1' : '0',
         );
     }
 }
