@@ -5,7 +5,7 @@
 /////////////////////////////////////////////////////////////////////////////
 
 $app['basename'] = 'glpi_agent';
-$app['version'] = '0.1.13';
+$app['version'] = '0.1.15';
 $app['release'] = '1';
 $app['vendor'] = 'SnugLinux';
 $app['packager'] = 'SnugLinux';
