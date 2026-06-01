@@ -141,6 +141,15 @@ additional_oem_disable() {
     restart_service_if_running
 }
 
+additional_oem_report() {
+    if [ ! -x "$ADDITIONAL_OEM_COMMAND" ]; then
+        log "glpi-additional-oem не знайдено: $ADDITIONAL_OEM_COMMAND"
+        exit 1
+    fi
+
+    "$ADDITIONAL_OEM_COMMAND" --dry-run --debug
+}
+
 additional_oem_status() {
     log "CONFIG  : $ADDITIONAL_OEM_CONFIG"
     log "JSON    : $ADDITIONAL_OEM_JSON"
@@ -529,6 +538,9 @@ case "${1:-}" in
     additional-oem-status)
         additional_oem_status
         ;;
+    additional-oem-report)
+        additional_oem_report
+        ;;
     run-now)
         run_now
         ;;
@@ -550,7 +562,7 @@ case "${1:-}" in
         check_certificate "${1:-}"
         ;;
     *)
-        log "Usage: $0 {additional-oem-enable|additional-oem-disable|additional-oem-status|run-now|start|stop|restart-if-running|update-certificate|check-certificate}"
+        log "Usage: $0 {additional-oem-enable|additional-oem-disable|additional-oem-status|additional-oem-report|run-now|start|stop|restart-if-running|update-certificate|check-certificate}"
         exit 2
         ;;
 esac

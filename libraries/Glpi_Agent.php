@@ -643,9 +643,16 @@ class Glpi_Agent extends Daemon
             'board_serial',
         );
 
+        $preview = $this->_get_additional_oem_preview();
+
         $dmi = array();
         foreach ($dmi_fields as $field) {
-            $value = $this->_read_dmi($field);
+            $value = '';
+            if (isset($preview['dmi'][$field]) && trim((string) $preview['dmi'][$field]) !== '')
+                $value = trim((string) $preview['dmi'][$field]);
+            else
+                $value = $this->_read_dmi($field);
+
             $bad = ($field === 'product_uuid') ? $this->_is_bad_uuid($value) : $this->_is_bad_oem_value($field, $value);
             $dmi[$field] = array(
                 'value' => $value,
@@ -653,7 +660,11 @@ class Glpi_Agent extends Daemon
             );
         }
 
-        $primary_mac = $this->_get_primary_physical_mac();
+        if (isset($preview['primary_mac']) && trim((string) $preview['primary_mac']) !== '')
+            $primary_mac = trim((string) $preview['primary_mac']);
+        else
+            $primary_mac = $this->_get_primary_physical_mac();
+
         $primary_mac_bad = $this->_is_bad_mac($primary_mac);
         $serial_bad = $dmi['product_serial']['bad'] && $dmi['board_serial']['bad'];
         $uuid_bad = $dmi['product_uuid']['bad'];
@@ -661,6 +672,13 @@ class Glpi_Agent extends Daemon
         $enabled = $this->_is_additional_oem_enabled();
 
         $json = $this->_read_additional_oem_json_values();
+        if (is_array($preview) && isset($preview['json']) && is_array($preview['json'])) {
+            foreach (array('ssn', 'msn', 'uuid') as $key) {
+                if (empty($json[$key]) && ! empty($preview['json'][$key]))
+                    $json[$key] = $preview['json'][$key];
+            }
+        }
+
         $serial_number = $this->_get_glpi_serial_number($enabled, $dmi, $json, $primary_mac);
 
         $recommendation = 'ok';
@@ -1204,6 +1222,61 @@ class Glpi_Agent extends Daemon
         return $values;
     }
 
+
+    protected function _get_additional_oem_preview()
+    {
+        $preview = array(
+            'dmi' => array(),
+            'primary_mac' => '',
+            'identity_serial' => '',
+            'json' => array(
+                'ssn' => '',
+                'msn' => '',
+                'uuid' => '',
+            ),
+        );
+
+        if (! is_file(self::COMMAND_HELPER) || ! is_executable(self::COMMAND_HELPER))
+            return $preview;
+
+        $result = $this->_run_helper('additional-oem-report', TRUE);
+        if (! isset($result['output']) || ! is_array($result['output']))
+            return $preview;
+
+        $text = implode("
+", $result['output']);
+        foreach (explode("
+", $text) as $line) {
+            if (preg_match('/^(sys_vendor|product_name|product_serial|product_uuid|board_vendor|board_name|board_serial|primary_mac|identity_serial)\s*=\s*(.*)$/', trim($line), $matches)) {
+                $key = $matches[1];
+                $value = trim($matches[2]);
+                if ($key === 'primary_mac' || $key === 'identity_serial')
+                    $preview[$key] = $value;
+                else
+                    $preview['dmi'][$key] = $value;
+            }
+        }
+
+        $json_start = strpos($text, '{');
+        $json_end = strrpos($text, '}');
+        if ($json_start !== FALSE && $json_end !== FALSE && $json_end > $json_start) {
+            $raw_json = substr($text, $json_start, $json_end - $json_start + 1);
+            $json = json_decode($raw_json, TRUE);
+            if (is_array($json) && ! empty($json['content']) && is_array($json['content'])) {
+                if (! empty($json['content']['bios']) && is_array($json['content']['bios'])) {
+                    if (isset($json['content']['bios']['ssn']))
+                        $preview['json']['ssn'] = trim((string) $json['content']['bios']['ssn']);
+                    if (isset($json['content']['bios']['msn']))
+                        $preview['json']['msn'] = trim((string) $json['content']['bios']['msn']);
+                }
+                if (! empty($json['content']['hardware']) && is_array($json['content']['hardware']) && isset($json['content']['hardware']['uuid']))
+                    $preview['json']['uuid'] = trim((string) $json['content']['hardware']['uuid']);
+            }
+        }
+
+        return $preview;
+    }
+
     protected function _read_dmi($field)
     {
         if (! preg_match('/^[A-Za-z0-9_]+$/', $field))
@@ -1384,7 +1457,7 @@ class Glpi_Agent extends Daemon
     {
         clearos_profile(__METHOD__, __LINE__);
 
-        if (! preg_match('/^(additional-oem-enable|additional-oem-disable|additional-oem-status|run-now|start|stop|restart-if-running|update-certificate|check-certificate)$/', $action))
+        if (! preg_match('/^(additional-oem-enable|additional-oem-disable|additional-oem-status|additional-oem-report|run-now|start|stop|restart-if-running|update-certificate|check-certificate)$/', $action))
             throw new Engine_Exception('Invalid helper action', CLEAROS_ERROR);
 
         if (! is_file(self::COMMAND_HELPER) || ! is_executable(self::COMMAND_HELPER))

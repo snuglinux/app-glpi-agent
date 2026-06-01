@@ -37,7 +37,7 @@ The app is intentionally conservative: it manages only its own GLPI Agent config
 - `app-base-core`
 - `glpi-agent >= 1.17`
 - `glpi-additional-oem >= 0.1.4`
-- `glpi-additional-oem >= 0.1.3`
+- `glpi-additional-oem >= 0.1.4`
 - `openssl`
 - `sudo`
 - `systemd`
@@ -46,7 +46,7 @@ The RPM spec enforces:
 
 ```spec
 Requires:       glpi-agent >= 1.17
-Requires:       glpi-additional-oem >= 0.1.3
+Requires:       glpi-additional-oem >= 0.1.4
 ```
 
 ## Managed configuration
@@ -201,3 +201,7 @@ Unknown warnings category '-ambiguous'
 ```
 
 The helper only filters the old warning line from Webconfig manual-inventory output when an unpatched agent is still installed.
+## 0.1.16 update
+
+Webconfig now reads DMI/OEM preview data through the privileged helper. This fixes systems where `product_serial` and other DMI fields are readable by root but not by the Webconfig process.
+

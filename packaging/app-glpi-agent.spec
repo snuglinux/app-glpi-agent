@@ -1,5 +1,5 @@
 Name:           app-glpi-agent
-Version:        0.1.15
+Version:        0.1.16
 Release:        1%{?dist}
 Summary:        ClearOS GLPI Agent web interface
 
@@ -93,6 +93,10 @@ chmod 0440 %{buildroot}/etc/sudoers.d/clearos-glpi-agent
 %ghost %dir %attr(0755,root,root) /etc/glpi-agent/certs
 
 %changelog
+* Sun May 31 2026 SnugLinux <khvalera@ukr.net> - 0.1.16-1
+- Read DMI/OEM preview through the privileged helper so root-only serial fields are visible in Webconfig.
+- Fix Serial number display when product_serial is readable only by root.
+
 * Sun May 31 2026 SnugLinux <khvalera@ukr.net> - 0.1.15-1
 - Require glpi-additional-oem >= 0.1.4.
 - Generate OEM additional-content before manual inventory runs.
